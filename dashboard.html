@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ThingSpeak Dark Theme Dashboard</title>
     
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
+    <script src="https://unpkg.com/paho-mqtt@1.1.0/paho-mqtt.js" type="text/javascript"></script>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
@@ -76,5 +76,197 @@
         .input-group { 
             margin-top: 10px; 
             display: flex; 
-            justify-
+            justify-content: center; 
+            gap: 10px; 
+        }
+        .input-group input { 
+            padding: 8px; 
+            border: 1px solid #444; 
+            border-radius: 4px; 
+            width: 150px;
+            background-color: #383838;
+            color: white;
+        }
+        .input-group button { 
+            padding: 8px 15px; 
+            background-color: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+        }
+        .input-group button:hover { 
+            background-color: #0056b3; 
+        }
+        .status-bar { 
+            padding: 10px; 
+            margin-bottom: 20px; 
+            border-radius: 4px; 
+            text-align: center; 
+        }
+        .status-connected { 
+            background-color: #004d00; 
+            color: #4CAF50; 
+        }
+        .status-disconnected { 
+            background-color: #5d0000; 
+            color: #f44336; 
+        }
+    </style>
+</head>
+<body>
 
+    <div class="dashboard-container">
+        <h1>ThingSpeak MQTT Dashboard (Dark Theme)</h1>
+        
+        <div id="connection_status" class="status-bar status-disconnected">
+            Connecting...
+        </div>
+
+        <div class="data-grid">
+            
+            <div class="chart-card chart-area">
+                <div class="data-label">Field 1 (Temperature) History - Last 48 Entries</div>
+                <canvas id="historicalChart"></canvas>
+            </div>
+
+            <div class="side-panel">
+                
+                <div class="value-card">
+                    <div class="data-label">Latest Field 1 (Temperature)</div>
+                    <span id="field1_latest" class="data-value">--.-</span> <span style="color: #007bff;">Units</span>
+                </div>
+
+                <div class="value-card">
+                    <div class="data-label">Latest Field 2 (Humidity)</div>
+                    <span id="field2_latest" class="data-value">--.-</span> <span style="color: #007bff;">Units</span>
+                </div>
+            </div>
+
+            <div class="control-card">
+                <div class="data-label" style="color: white;">Write Control: Update Field 3</div>
+                <div class="input-group">
+                    <input type="number" id="field3_input" placeholder="Enter Field 3 Value">
+                    <button onclick="sendDataToThingSpeak()">Send Data</button>
+                </div>
+                <p id="write_status" style="margin-top: 10px; color: #00e0ff;">Ready to send.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- ⚙️ USER CONFIGURATION ---
+        const CHANNEL_ID = "3147672"; 
+        const READ_API_KEY = "1379T98MCK1LPPAZ"; 
+        const WRITE_API_KEY = "1PQ5U98I93EDB4SJ"; 
+        
+        // MQTT Device Credentials (Used ONLY for connection status)
+        const MQTT_CLIENT_ID = "CxkfGzYhFQofIywFBT0WFTk";
+        const MQTT_USERNAME = "CxkfGzYhFQofIywFBT0WFTk";
+        const MQTT_PASSWORD = "2xiaTbfiFUjAKQd4aSouGN4g";
+
+        // ThingSpeak Endpoints
+        const MQTT_HOST = "mqtt3.thingspeak.com";
+        const MQTT_PORT = 443; 
+        const MQTT_PATH = "/mqtt";
+        const WRITE_ENDPOINT = "https://api.thingspeak.com/update"; 
+        const READ_FEEDS_ENDPOINT = `https://api.thingspeak.com/channels/${CHANNEL_ID}/feeds.json?api_key=${READ_API_KEY}&results=48`; 
+        
+        const MQTT_TOPIC = `channels/${CHANNEL_ID}/subscribe/json/${READ_API_KEY}`;
+        // --- -------------------------------------------------- ---
+
+        let chartInstance;
+        const statusElement = document.getElementById("connection_status");
+        const writeStatusElement = document.getElementById("write_status");
+        const field1Latest = document.getElementById("field1_latest");
+        const field2Latest = document.getElementById("field2_latest");
+
+
+        // [MQTT Connection Functions - Used for Status Only]
+        function startConnect() {
+            statusElement.innerHTML = "Connecting...";
+            statusElement.className = "status-bar";
+            // Uses the new Paho MQTT client from unpkg
+            let client = new Paho.MQTT.Client(MQTT_HOST, MQTT_PORT, MQTT_PATH, MQTT_CLIENT_ID);
+            client.onConnectionLost = onConnectionLost;
+            client.onMessageArrived = onMessageArrived; 
+            const options = {
+                timeout: 3,
+                useSSL: true, 
+                userName: MQTT_USERNAME,
+                password: MQTT_PASSWORD,
+                onSuccess: onConnect,
+                onFailure: onFailure
+            };
+            client.connect(options);
+
+            // Fetch historical data immediately for the chart
+            fetchHistoricalData();
+        }
+
+        function onConnect() {
+            statusElement.innerHTML = "Connected to ThingSpeak!";
+            statusElement.className = "status-bar status-connected";
+            client.subscribe(MQTT_TOPIC, { qos: 0 }); 
+        }
+        function onFailure(responseObject) {
+            statusElement.innerHTML = "Connection Failed!";
+            statusElement.className = "status-bar status-disconnected";
+        }
+        function onConnectionLost(responseObject) {
+            if (responseObject.errorCode !== 0) {
+                statusElement.innerHTML = "Connection Lost! Attempting to reconnect...";
+                statusElement.className = "status-bar status-disconnected";
+            }
+        }
+        function onMessageArrived(message) { 
+            // Optional: You could update the Field 1 and Field 2 cards here for true real-time display
+        }
+        // [END MQTT Connection Functions]
+
+        // 📈 Fetch Historical Data and Update Cards
+        function fetchHistoricalData() {
+            fetch(READ_FEEDS_ENDPOINT)
+                .then(response => response.json())
+                .then(data => {
+                    const timestamps = [];
+                    const field1Values = [];
+                    const field2Values = [];
+
+                    // 1. Process Data for Chart
+                    data.feeds.forEach(feed => {
+                        // Use created_at for X-axis label, showing only the time
+                        timestamps.push(new Date(feed.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                        
+                        // Validate and Parse Field 1 (Temperature)
+                        let val1 = feed.field1;
+                        let parsedVal1 = null;
+                        if (val1 && !isNaN(val1)) {
+                            parsedVal1 = parseFloat(val1);
+                        }
+                        field1Values.push(parsedVal1);
+
+                        // Validate and Parse Field 2 (Humidity)
+                        let val2 = feed.field2;
+                        let parsedVal2 = null;
+                        if (val2 && !isNaN(val2)) {
+                            parsedVal2 = parseFloat(val2);
+                        }
+                        field2Values.push(parsedVal2);
+                    });
+
+                    // 2. Update Latest Value Cards
+                    if (data.feeds.length > 0) {
+                        const latestEntry = data.feeds[data.feeds.length - 1];
+                        // Update Field 1 card with the most recent valid number
+                        field1Latest.innerHTML = field1Values[field1Values.length - 1] !== null ? field1Values[field1Values.length - 1].toFixed(2) : '--';
+                        // Update Field 2 card with the most recent valid number
+                        field2Latest.innerHTML = field2Values[field2Values.length - 1] !== null ? field2Values[field2Values.length - 1].toFixed(2) : '--';
+                    }
+
+                    // 3. Draw the chart 
+                    drawChart(timestamps, field1Values, field2Values);
+                })
+                .catch(error => {
+                    console.error('Error fetching historical data:', error);
+                    document.getElementById('historicalChart').innerHTML = '<div style="color: red;">Error loading historical data. Check API Key or Console for details.</div>';
